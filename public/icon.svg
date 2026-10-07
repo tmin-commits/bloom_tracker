@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#fff1f2" />
+      <stop offset="50%" stopColor="#ffe4e6" />
+      <stop offset="100%" stopColor="#fecdd3" />
+    </linearGradient>
+    <linearGradient id="petal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#fb7185" />
+      <stop offset="100%" stopColor="#e11d48" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" floodColor="#f43f5e" floodOpacity="0.25"/>
+    </filter>
+  </defs>
+  <!-- Background with rounded squircles -->
+  <rect width="512" height="512" rx="128" fill="url(#bg)" />
+  
+  <!-- Outer soft glow ring -->
+  <circle cx="256" cy="256" r="170" fill="none" stroke="#f43f5e" stroke-width="8" stroke-dasharray="16 12" opacity="0.4" />
+  
+  <!-- Flower center blossom -->
+  <g transform="translate(256, 256)" filter="url(#shadow)">
+    <!-- 6 Petals -->
+    <path d="M 0 -130 C 45 -130 65 -50 0 0 C -65 -50 -45 -130 0 -130 Z" fill="url(#petal)" opacity="0.9" />
+    <path d="M 0 -130 C 45 -130 65 -50 0 0 C -65 -50 -45 -130 0 -130 Z" fill="url(#petal)" opacity="0.9" transform="rotate(60)" />
+    <path d="M 0 -130 C 45 -130 65 -50 0 0 C -65 -50 -45 -130 0 -130 Z" fill="url(#petal)" opacity="0.9" transform="rotate(120)" />
+    <path d="M 0 -130 C 45 -130 65 -50 0 0 C -65 -50 -45 -130 0 -130 Z" fill="url(#petal)" opacity="0.9" transform="rotate(180)" />
+    <path d="M 0 -130 C 45 -130 65 -50 0 0 C -65 -50 -45 -130 0 -130 Z" fill="url(#petal)" opacity="0.9" transform="rotate(240)" />
+    <path d="M 0 -130 C 45 -130 65 -50 0 0 C -65 -50 -45 -130 0 -130 Z" fill="url(#petal)" opacity="0.9" transform="rotate(300)" />
+    
+    <!-- Core Center -->
+    <circle cx="0" cy="0" r="38" fill="#ffffff" />
+    <circle cx="0" cy="0" r="24" fill="#fb7185" />
+  </g>
+</svg>
