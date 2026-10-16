@@ -11,7 +11,8 @@ import {
   saveLogToServer, 
   saveSettingsToServer, 
   sendCareToServer, 
-  fetchInitialState 
+  fetchInitialState,
+  syncAllToServer
 } from './services/socket';
 import CycleWheel from './components/CycleWheel';
 import DailyLoggerModal from './components/DailyLoggerModal';
@@ -24,6 +25,41 @@ import InstallPrompt from './components/InstallPrompt';
 import BottomNavBar from './components/BottomNavBar';
 import { format } from 'date-fns';
 
+// Local storage keys that are protected from server wipes
+const STORAGE_LOGS_KEY = 'bloom_saved_logs_v2';
+const STORAGE_SETTINGS_KEY = 'bloom_saved_settings_v2';
+const STORAGE_STATE_KEY = 'bloom_cached_state';
+
+function getLocalLogs() {
+  try {
+    const raw = localStorage.getItem(STORAGE_LOGS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveLocalLogs(logs) {
+  try {
+    localStorage.setItem(STORAGE_LOGS_KEY, JSON.stringify(logs));
+  } catch (e) {}
+}
+
+function getLocalSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_SETTINGS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveLocalSettings(settings) {
+  try {
+    localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(settings));
+  } catch (e) {}
+}
+
 export default function App() {
   // Determine mode from URL query parameters (e.g., ?mode=partner)
   const getInitialMode = () => {
@@ -34,14 +70,25 @@ export default function App() {
     return 'her';
   };
 
-  const [activeMode, setActiveMode] = useState(getInitialMode); // 'her' | 'partner'
-  const [activeTab, setActiveTab] = useState('cycle'); // 'cycle' | 'calendar' | 'insights' | 'settings'
+  const [activeMode, setActiveMode] = useState(getInitialMode);
+  const [activeTab, setActiveTab] = useState('cycle');
   
-  // Offline / Local-First Caching
+  // Instant local-first initialization - NEVER waits on server to open!
   const [appState, setAppState] = useState(() => {
     try {
-      const cached = localStorage.getItem('bloom_cached_state');
-      return cached ? JSON.parse(cached) : null;
+      const cached = localStorage.getItem(STORAGE_STATE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        // Ensure local protected logs take precedence
+        const localLogs = getLocalLogs();
+        const localSettings = getLocalSettings();
+        return {
+          ...parsed,
+          logs: { ...(parsed.logs || {}), ...localLogs },
+          settings: localSettings ? { ...(parsed.settings || {}), ...localSettings } : parsed.settings
+        };
+      }
+      return null;
     } catch (e) {
       return null;
     }
@@ -49,6 +96,7 @@ export default function App() {
 
   const [loading, setLoading] = useState(!appState);
   const [isConnected, setIsConnected] = useState(socket.connected);
+  const [isWakingServer, setIsWakingServer] = useState(false);
   
   // Modals & Popups
   const [loggerDate, setLoggerDate] = useState(null);
@@ -60,27 +108,79 @@ export default function App() {
 
   // Load initial state and setup sockets
   useEffect(() => {
+    setIsWakingServer(true);
+
     fetchInitialState()
-      .then(data => {
-        setAppState(data);
-        localStorage.setItem('bloom_cached_state', JSON.stringify(data));
+      .then(serverData => {
+        setIsWakingServer(false);
+        const localLogs = getLocalLogs();
+        const localSettings = getLocalSettings();
+
+        // Merge: Local logs ALWAYS survive server restarts/wipes!
+        const mergedLogs = { ...(serverData.logs || {}), ...localLogs };
+        const mergedSettings = localSettings 
+          ? { ...(serverData.settings || {}), ...localSettings } 
+          : (serverData.settings || {});
+
+        const mergedState = {
+          ...serverData,
+          logs: mergedLogs,
+          settings: mergedSettings
+        };
+
+        setAppState(mergedState);
+        saveLocalLogs(mergedLogs);
+        if (localSettings) saveLocalSettings(mergedSettings);
+        localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(mergedState));
         setLoading(false);
+
+        // If the server restarted and lost data, re-hydrate it from her phone!
+        const serverLogCount = Object.keys(serverData.logs || {}).length;
+        const localLogCount = Object.keys(mergedLogs).length;
+        if (localLogCount > serverLogCount || localSettings) {
+          syncAllToServer({ logs: mergedLogs, settings: mergedSettings }).catch(() => {});
+        }
       })
       .catch(err => {
-        console.warn('Backend fetch failed, using cached state:', err);
+        console.warn('Backend fetch failed, relying on local storage:', err);
+        setIsWakingServer(false);
         setLoading(false);
       });
 
     // Sockets
     const onConnect = () => {
       setIsConnected(true);
+      setIsWakingServer(false);
       emitMode(activeMode, activeMode === 'her' ? appState?.settings?.userName : appState?.settings?.partnerName);
+      
+      // Auto-rehydrate server on reconnect if needed
+      const localLogs = getLocalLogs();
+      const localSettings = getLocalSettings();
+      if (Object.keys(localLogs).length > 0) {
+        syncAllToServer({ logs: localLogs, settings: localSettings }).catch(() => {});
+      }
     };
+
     const onDisconnect = () => setIsConnected(false);
+
     const onStateUpdate = (payload) => {
-      setAppState(payload);
-      localStorage.setItem('bloom_cached_state', JSON.stringify(payload));
+      // Don't let an empty server state wipe out local logs!
+      const localLogs = getLocalLogs();
+      const localSettings = getLocalSettings();
+      const safeLogs = { ...(payload.logs || {}), ...localLogs };
+      const safeSettings = localSettings ? { ...(payload.settings || {}), ...localSettings } : payload.settings;
+
+      const safeState = {
+        ...payload,
+        logs: safeLogs,
+        settings: safeSettings
+      };
+
+      setAppState(safeState);
+      saveLocalLogs(safeLogs);
+      localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(safeState));
     };
+
     const onCareReceived = (reaction) => {
       setActiveCarePing(reaction);
     };
@@ -114,20 +214,47 @@ export default function App() {
 
   // Actions
   const handleSaveLog = async (date, logData) => {
-    // Optimistic local update
+    // 1. Immediately save to phone storage (GUARANTEED NEVER LOST)
+    const currentLocal = getLocalLogs();
+    const updatedLogs = {
+      ...currentLocal,
+      [date]: { ...(currentLocal[date] || {}), ...logData, date, updatedAt: Date.now() }
+    };
+    saveLocalLogs(updatedLogs);
+
+    // 2. Immediately update UI state (0ms latency!)
     if (appState) {
-      const updated = {
+      const updatedState = {
         ...appState,
-        logs: { ...appState.logs, [date]: { ...appState.logs[date], ...logData, date } }
+        logs: updatedLogs
       };
-      setAppState(updated);
-      localStorage.setItem('bloom_cached_state', JSON.stringify(updated));
+      setAppState(updatedState);
+      localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(updatedState));
     }
-    await saveLogToServer(date, logData);
+
+    // 3. Sync to server in background
+    try {
+      await saveLogToServer(date, logData);
+    } catch (err) {
+      console.warn('Server offline/waking, log saved locally and will sync on connect:', err);
+    }
   };
 
   const handleSaveSettings = async (newSettings) => {
-    await saveSettingsToServer(newSettings);
+    saveLocalSettings(newSettings);
+    if (appState) {
+      const updatedState = {
+        ...appState,
+        settings: { ...(appState.settings || {}), ...newSettings }
+      };
+      setAppState(updatedState);
+      localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(updatedState));
+    }
+    try {
+      await saveSettingsToServer(newSettings);
+    } catch (err) {
+      console.warn('Server offline/waking, settings saved locally:', err);
+    }
   };
 
   const handleSendCare = async (careData) => {
@@ -253,9 +380,17 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-1.5">
-                <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-full border border-emerald-200/60 dark:border-emerald-800/60">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span>{isConnected ? 'Synced' : 'Offline'}</span>
+                <span className={`flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border ${
+                  isConnected 
+                    ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200/60 dark:border-emerald-800/60'
+                    : isWakingServer
+                    ? 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border-amber-200/60 dark:border-amber-800/60'
+                    : 'text-stone-500 dark:text-stone-400 bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    isConnected ? 'bg-emerald-500 animate-pulse' : isWakingServer ? 'bg-amber-500 animate-ping' : 'bg-stone-400'
+                  }`}></span>
+                  <span>{isConnected ? 'Live Synced' : isWakingServer ? 'Waking Cloud...' : 'Saved on Phone'}</span>
                 </span>
 
                 <button

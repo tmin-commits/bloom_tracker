@@ -79,6 +79,19 @@ app.post('/api/settings', (req, res) => {
   res.json(payload);
 });
 
+app.post('/api/sync', (req, res) => {
+  const { logs, settings } = req.body;
+  if (settings) updateSettings(settings);
+  if (logs && typeof logs === 'object') {
+    Object.entries(logs).forEach(([date, log]) => {
+      saveDayLog(date, log);
+    });
+  }
+  const payload = getFullPayload();
+  io.emit('state_update', payload);
+  res.json({ success: true, payload });
+});
+
 app.post('/api/logs', (req, res) => {
   const { date, log } = req.body;
   if (!date) {

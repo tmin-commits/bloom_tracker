@@ -47,3 +47,11 @@ export function sendCareToServer(careData) {
 export function fetchInitialState() {
   return fetch('/api/state').then(r => r.json());
 }
+
+export function syncAllToServer(payload) {
+  return fetch('/api/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(r => r.json());
+}
